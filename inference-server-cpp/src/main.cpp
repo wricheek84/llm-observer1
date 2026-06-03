@@ -21,22 +21,43 @@ class InferenceServiceImpl final : public inference::InferenceEngine::Service {
         }
 
         std::cout << "Received request for model: " << request->model_id() << " with " << tokens << " tokens." << std::endl;
+        std::vector<std::future<std::pair<int, double>>> futures;
+        futures.reserve(tokens);
 
         for (int i = 0; i < tokens; i++) {
             int token = request->tokens(i);
-            
-            
+            auto promise = std::make_shared<std::promise<std::pair<int, double>>>();
+            futures.push_back(promise->get_future());
             order_queue.push({
                 request->model_id(), 
                 (int64_t)token, 
                 1, 
-                std::chrono::steady_clock::now()
+                std::chrono::steady_clock::now(),
+                promise
             });
         }
+        double internal_latency_ms = 0.0;
+        bool latency_captured = false;
+        try{
+            for(auto & f:futures){
+                std::pair<int, double> result = f.get();
+                int prediction = result.first;
+                double comp_time = result.second;
+                if(!latency_captured){
+                    internal_latency_ms = comp_time;
+                    latency_captured = true;
+                }
+                reply->add_output_tokens(prediction);
 
-        
-        reply->add_output_tokens(200); 
+            }
+        }
+        catch (const std::exception& e){
+            std::cerr << "Inference failed: " << e.what() << std::endl;
+            return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Inference engine error: ") + e.what());
+        }
+        context->AddTrailingMetadata("x-inference-latency-ms", std::to_string(internal_latency_ms));
         return grpc::Status::OK;
+       
     }
 };
 

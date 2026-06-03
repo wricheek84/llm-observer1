@@ -8,7 +8,7 @@ struct Tensor {
     std::vector<int64_t> shape; 
 
     
-    Tensor(std::vector<int>& raw_batch) {
+    Tensor(const std::vector<int>& raw_batch) {
         
         for(int token : raw_batch) {
             data.push_back(static_cast<int64_t>(token));

@@ -12,12 +12,15 @@
 #include <unordered_map>
 #include <string>
 #include <cmath>
+#include <future>
 
 struct InferenceRequest {
     std::string model_id; 
     int64_t token; 
     int64_t mask; 
     std::chrono::steady_clock::time_point arrival_time;
+    std::shared_ptr<std::promise<std::pair<int, double>>> result_promise;
+
 };
 
 struct TelemetrySnapshot {
@@ -106,6 +109,7 @@ private:
                 auto start_infer = std::chrono::steady_clock::now();
                 auto output_tensors = sessions.at(requests[0].model_id)->Run(Ort::RunOptions{nullptr}, input_names, input_tensors, 2, output_names, 1);
                 auto end_infer = std::chrono::steady_clock::now();
+                double comp_time_ms = std::chrono::duration<double, std::milli>(end_infer - start_infer).count();
                 
                 active_workers--;
 
@@ -136,6 +140,9 @@ private:
                     float logit1 = floatarr[b * 2 + 1];
 
                     int prediction = (logit1 > logit0) ? 1 : 0;
+                    if (requests[b].result_promise) {
+                        requests[b].result_promise->set_value({prediction, comp_time_ms});
+                    }
 
                     float max_val = std::max(logit0, logit1);
                     float sum_exp = std::exp(logit0 - max_val) + std::exp(logit1 - max_val);
@@ -153,6 +160,11 @@ private:
             } catch (const std::exception& e) {
                 std::cerr << "[WORKER " << id << "] ERROR: " << e.what() << std::endl;
                 if(active_workers > 0) active_workers--;
+                for (const auto& req : requests) {
+                    if (req.result_promise) {
+                        req.result_promise->set_exception(std::make_exception_ptr(std::runtime_error(e.what())));
+                    }
+                }
             }
         }
     }
