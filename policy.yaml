@@ -1,0 +1,81 @@
+grpc_settings:
+  server_address: "localhost:50051"
+  connection_timeout_seconds: 5
+  max_message_size_mb: 10
+  tls:
+    enabled: false
+
+pii_settings:
+  email:
+    enabled: true
+    action: "block"
+    patterns:
+      - email
+
+  phone:
+    enabled: true
+    action: "log"
+    patterns:
+      - international_phone
+      - local_phone
+
+  credit_card:
+    enabled: true
+    action: "block"
+    patterns:
+      - visa
+      - mastercard
+      - amex
+      - discover
+
+  ssn:
+    enabled: true
+    action: "block"
+
+  ip_address:
+    enabled: true
+    action: "log"
+
+  bank_account:
+    enabled: true
+    action: "block"
+
+prompt_injection:
+  enabled: true
+  action: "block"
+  case_insensitive: true
+
+  keywords:
+    - "ignore previous instructions"
+    - "ignore all previous instructions"
+    - "disregard previous instructions"
+    - "forget your instructions"
+    - "override system prompt"
+    - "reveal system prompt"
+    - "show hidden instructions"
+    - "act as"
+    - "you are now dan"
+    - "developer mode"
+    - "jailbreak"
+    - "system bypass"
+    - "bypass restrictions"
+    - "disable safety"
+    - "pretend to be"
+    - "roleplay as"
+    - "do anything now"
+
+  regex_patterns:
+    - "(?i)ignore.*instruction"
+    - "(?i)forget.*rule"
+    - "(?i)reveal.*prompt"
+    - "(?i)show.*system"
+    - "(?i)bypass.*safety"
+    - "(?i)disable.*guardrail"
+
+  max_keyword_matches: 1
+
+logging:
+  enabled: true
+  level: "INFO"
+  audit_prompt_injection: true
+  audit_pii_detection: true
