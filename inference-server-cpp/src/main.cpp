@@ -68,7 +68,7 @@ int main() {
 
     
     std::vector<std::pair<std::string, std::wstring>> models = {
-        {"classifier", L"C:\\Users\\wrich\\inference-server-cpp\\onnx\\model_quantized.onnx"}
+       {"classifier", L"C:\\Users\\wrich\\llm-observer\\inference-server-cpp\\onnx\\prompt_injection.onnx"}
     };
 
 

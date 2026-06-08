@@ -17,7 +17,7 @@ class LLMWatchdogGateway:
     def __init__(self, config_path="policy.yaml"):
         print("[INIT] Booting up LLM Watchdog Gateway...")
         
-        # 1. Load your custom rulebook
+        
         try:
             with open(config_path, 'r') as f:
                 self.config = yaml.safe_load(f)
@@ -37,13 +37,13 @@ class LLMWatchdogGateway:
         print("[INIT] Critic Layer fully initialized and armed.")
 
         
-        # 2. Pre-compile the prompt injection regex rules
+       
         self.injection_regex_compiled = []
         if self.injection_cfg.get('enabled', True):
             for pattern in self.injection_cfg.get('regex_patterns', []):
                 self.injection_regex_compiled.append(re.compile(pattern))
                 
-        # 3. Define and pre-compile our PII regex nets
+        
         self.pii_patterns = {
             "email": re.compile(r"[\w\.-]+@[\w\.-]+\.\w+"),
             "phone": re.compile(r"\b\+?\d{1,3}[-.\s]?\(?\d{1,4}?\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b"),
@@ -56,7 +56,7 @@ class LLMWatchdogGateway:
         print(f"[INIT] Security Layer ready. Armed with {len(self.injection_regex_compiled)} anti-injection regex nets.")
         print(f"[INIT] PII Filter armed for: {', '.join(self.pii_patterns.keys())}")
 
-        # 4. Establish the gRPC Bridge to the C++ Engine
+        
         server_address = self.grpc_cfg.get('server_address', 'localhost:50051')
         print(f"[INIT] Establishing gRPC bridge to C++ Engine at {server_address}...")
         self.channel = grpc.insecure_channel(server_address)
@@ -66,7 +66,7 @@ class LLMWatchdogGateway:
         from dotenv import load_dotenv
         load_dotenv()
         print("[INIT] Loading Hugging Face tokenizer for DistilBERT...")
-        self.tokenizer = AutoTokenizer.from_pretrained("Xenova/distilbert-base-uncased-finetuned-sst-2-english")
+        self.tokenizer = AutoTokenizer.from_pretrained("fmops/distilbert-prompt-injection")
         self.openrouter_key =os.getenv("OPENROUTER_API_KEY")
         
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
@@ -95,7 +95,7 @@ class LLMWatchdogGateway:
             raise Exception(f"Network transport failure when contacting OpenRouter: {e}")
 
     def scan_input(self, text):
-        # Check for Prompt Injections
+       
         if self.injection_cfg.get('enabled', True):
             is_case_insensitive = self.injection_cfg.get('case_insensitive', True)
             check_text = text.lower() if is_case_insensitive else text
@@ -111,7 +111,7 @@ class LLMWatchdogGateway:
                     if self.injection_cfg.get('action') == "block":
                         return {"status": "block", "reason": f"Prompt injection regex triggered: '{regex.pattern}'"}
 
-        # Check for PII Leakage
+      
         for pii_type, regex in self.pii_patterns.items():
             cfg = self.pii_cfg.get(pii_type, {})
             if cfg.get('enabled', True):
@@ -125,32 +125,30 @@ class LLMWatchdogGateway:
         return {"status": "allow", "reason": "Request verified safe"}
     def calculate_faithfulness(self, query, model_response):
         print("[CRITIC] Analyzing model response for hallucinations...")
-        
-        # 1. Query the vector database for the factual context
-        # We embed the user's question to find the relevant textbook page
+      
         query_vector = self.encoder.encode(query).tolist()
         
         try:
             response = self.db_client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector,
-                limit=1  # We only need the single most relevant chunk
+                limit=1  
             )
             search_results = response.points
         except Exception as e:
             print(f"[CRITIC ERROR] Database unreachable: {e}")
-            return 1.0, "DB_OFFLINE" # Fail open if DB dies, don't crash the gateway
+            return 1.0, "DB_OFFLINE" 
             
         if not search_results:
             print("[CRITIC] No factual context found in database. Passing by default.")
             return 1.0, "NO_CONTEXT"
             
-        # 2. Extract the ground truth text from the database payload
+        
         ground_truth_text = search_results[0].payload['text_content']
         print(f"[CRITIC] Ground truth retrieved: '{ground_truth_text}'")
 
         
-        # 3. Translate both the engine's answer and the ground truth into vectors
+        
         response_vector = self.encoder.encode(model_response)
         truth_vector = self.encoder.encode(ground_truth_text)
 
@@ -159,7 +157,7 @@ class LLMWatchdogGateway:
         norm_response = np.linalg.norm(response_vector)
         norm_truth = np.linalg.norm(truth_vector)
         
-        # Prevent division by zero errors
+        
         if norm_response == 0 or norm_truth == 0:
             return 0.0, ground_truth_text
             
@@ -175,24 +173,24 @@ class LLMWatchdogGateway:
         encoded_tokens = self.tokenizer.encode(user_query, add_special_tokens=True)
 
         try:
-            # Pack your actual dynamic tokens into the gRPC payload
+            
             request_payload = inference_pb2.InferenceRequest(
                 tokens=encoded_tokens,
                 model_id="classifier"
             )
-            # Execute gRPC Call 1 to verify user intent via your C++ thread pool
+           
             grpc_response = self.stub.RunInference(request_payload)
             engine_latency = "0.0"
             
            
-            if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 0:
+            if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 1:
                return {"status": "block", "reason": "C++ Inference Engine flagged hostile/malicious semantic intent."}
                
         except Exception as e:
             return {"error": "C++ Security Engine Unreachable", "details": str(e)}
         print("[GATEWAY] C++ semantic check passed. Fetching dynamic answer from OpenRouter")
         try:
-            # Call your brand-new helper method to get a real answer from the cloud LLM
+            
             model_text_response = self._fetch_llm_response(user_query)
             print(f"[GATEWAY] Live LLM Response received.")
         except Exception as e:
