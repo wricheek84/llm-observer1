@@ -12,6 +12,7 @@ subfolder_path = os.path.join(os.path.dirname(__file__), "inference-server-cpp")
 sys.path.append(subfolder_path)
 import inference_pb2
 import inference_pb2_grpc
+from llm_db import insert_request
 
 class LLMWatchdogGateway:
     def __init__(self, config_path="policy.yaml"):
@@ -168,8 +169,19 @@ class LLMWatchdogGateway:
     def process_request(self, user_query):
         security_verdict = self.scan_input(user_query)
         if security_verdict and security_verdict.get('status') == 'block':
+            reason = security_verdict.get('reason', 'Regex block')
+            insert_request(
+                user_input=user_query,
+                regex_status=f"BLOCKED: {reason}",
+                inference_result=-1, # Bypassed C++ engine
+                inference_time=0.0,
+                llm_response=None,
+                critic_score=None,
+                verdict="SECURITY_BLOCK",
+                final_output=reason
+            )
             return security_verdict
-        print("[GATEWAY] Regex pass cleared. Extracting real text tokens for C++ Server")
+        print("[GATEWAY] Regex pass cleared. Extracting tokens for inference Server")
         encoded_tokens = self.tokenizer.encode(user_query, add_special_tokens=True)
 
         try:
@@ -180,11 +192,22 @@ class LLMWatchdogGateway:
             )
            
             grpc_response = self.stub.RunInference(request_payload)
-            engine_latency = "0.0"
+            engine_latency =0.0
             
            
             if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 1:
-               return {"status": "block", "reason": "C++ Inference Engine flagged hostile/malicious semantic intent."}
+               reason = "C++ Inference Engine flagged hostile/malicious semantic intent."
+               insert_request(
+                    user_input=user_query,
+                    regex_status="PASSED",
+                    inference_result=1, 
+                    inference_time=engine_latency,
+                    llm_response=None,
+                    critic_score=None,
+                    verdict="SECURITY_BLOCK",
+                    final_output=reason
+                )
+               return {"status": "block", "reason": reason}
                
         except Exception as e:
             return {"error": "C++ Security Engine Unreachable", "details": str(e)}
@@ -199,6 +222,16 @@ class LLMWatchdogGateway:
         faithfulness_score, ground_truth = self.calculate_faithfulness(user_query, model_text_response)
         if faithfulness_score >= 0.75:
             print("[GATEWAY] Response verified as factual. Passing to user.")
+            insert_request(
+                user_input=user_query,
+                regex_status="PASSED",
+                inference_result=0, # Clean pass
+                inference_time=engine_latency,
+                llm_response=model_text_response,
+                critic_score=float(faithfulness_score),
+                verdict="SUCCESS",
+                final_output=model_text_response
+            )
             return {
                 "status": "SUCCESS",
                 "response": model_text_response,
@@ -209,7 +242,7 @@ class LLMWatchdogGateway:
         print(f"[WATCHDOG ALERT] Hallucination detected (Score: {faithfulness_score:.4f} < 0.75)! Intercepting response.")
         print("[GATEWAY] Reformulating query with ground-truth context injection...")
         healed_query = f"{user_query} (System Hint: Stick strictly to this data: {ground_truth})"
-        print("[GATEWAY] Forwarding healed query for C++ validation and Cloud Recovery...")
+        print("[GATEWAY] Forwarding healed query for C++ validation and Cloud Recovery")
         try:
             healed_tokens = self.tokenizer.encode(healed_query, add_special_tokens=True)
             
@@ -227,6 +260,16 @@ class LLMWatchdogGateway:
 
         new_score, _ = self.calculate_faithfulness(healed_query, healed_text_response)
         if new_score >= 0.75:
+            insert_request(
+                user_input=user_query,
+                regex_status="PASSED",
+                inference_result=0,
+                inference_time=engine_latency,
+                llm_response=model_text_response, 
+                critic_score=float(new_score),      
+                verdict="HEALED",
+                final_output=healed_text_response  
+            )
             print("[GATEWAY] Self-healing successful! Response corrected and cleared.")
             return {
                 "status": "HEALED",
@@ -236,6 +279,17 @@ class LLMWatchdogGateway:
                 "retries_attempted": 1
             }
         print("[WATCHDOG CRITICAL] Recovery attempt failed to clear threshold. Shutting down exploit risk.")
+        fallback_msg = "I don't have enough information to answer that question accurately."
+        insert_request(
+            user_input=user_query,
+            regex_status="PASSED",
+            inference_result=0,
+            inference_time=engine_latency,
+            llm_response=model_text_response,
+            critic_score=float(new_score),
+            verdict="BLOCKED",
+            final_output=fallback_msg
+        )
         return {
             "status": "BLOCKED",
             "response": "I don't have enough information.",
