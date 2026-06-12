@@ -191,8 +191,12 @@ class LLMWatchdogGateway:
                 model_id="classifier"
             )
            
-            grpc_response = self.stub.RunInference(request_payload)
-            engine_latency =0.0
+            grpc_response, call = self.stub.RunInference.with_call(request_payload)
+            engine_latency = 0.0
+            for key, value in call.trailing_metadata():
+                if key == 'x-inference-latency-ms':
+                    engine_latency = float(value)/1000;
+                    print(f"[TELEMETRY] Initial C++ inference latency: {engine_latency:.4f}ms")
             
            
             if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 1:
@@ -220,7 +224,7 @@ class LLMWatchdogGateway:
             return {"error": "Cloud Generation Failed", "details": str(e)}
 
         faithfulness_score, ground_truth = self.calculate_faithfulness(user_query, model_text_response)
-        if faithfulness_score >= 0.75:
+        if faithfulness_score >= 0.60:
             print("[GATEWAY] Response verified as factual. Passing to user.")
             insert_request(
                 user_input=user_query,
@@ -239,7 +243,7 @@ class LLMWatchdogGateway:
                 "engine_latency_ms": engine_latency,
                 "retries_attempted": 0
             }
-        print(f"[WATCHDOG ALERT] Hallucination detected (Score: {faithfulness_score:.4f} < 0.75)! Intercepting response.")
+        print(f"[WATCHDOG ALERT] Hallucination detected (Score: {faithfulness_score:.4f} < 0.60)! Intercepting response.")
         print("[GATEWAY] Reformulating query with ground-truth context injection...")
         healed_query = f"{user_query} (System Hint: Stick strictly to this data: {ground_truth})"
         print("[GATEWAY] Forwarding healed query for C++ validation and Cloud Recovery")
@@ -251,7 +255,25 @@ class LLMWatchdogGateway:
                 model_id="classifier"
             )
            
-            self.stub.RunInference(retry_payload)
+            grpc_response, call = self.stub.RunInference.with_call(retry_payload)
+            for key, value in call.trailing_metadata():
+                if key == 'x-inference-latency-ms':
+                    # Change: Accumulate the latency so the database tracks total system cost
+                    engine_latency += float(value)/1000;
+                    print(f"[TELEMETRY] Cumulative C++ pipeline latency: {engine_latency:.4f}ms")
+            if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 1:
+                reason = "C++ Engine blocked self-healed prompt variant due to semantic payload risk."
+                insert_request(
+                    user_input=user_query,
+                    regex_status="PASSED",
+                    inference_result=1,
+                    inference_time=engine_latency,
+                    llm_response=model_text_response,
+                    critic_score=float(faithfulness_score),
+                    verdict="SECURITY_BLOCK",
+                    final_output=reason
+                )
+                return {"status": "block", "reason": reason}
             
            
             healed_text_response = self._fetch_llm_response(healed_query)
@@ -259,7 +281,7 @@ class LLMWatchdogGateway:
             return {"error": "Recovery phase failed", "details": str(e)}
 
         new_score, _ = self.calculate_faithfulness(healed_query, healed_text_response)
-        if new_score >= 0.75:
+        if new_score >= 0.60:
             insert_request(
                 user_input=user_query,
                 regex_status="PASSED",

@@ -43,10 +43,7 @@ class InferenceServiceImpl final : public inference::InferenceEngine::Service {
                 std::pair<int, double> result = f.get();
                 int prediction = result.first;
                 double comp_time = result.second;
-                if(!latency_captured){
-                    internal_latency_ms = comp_time;
-                    latency_captured = true;
-                }
+                internal_latency_ms += comp_time;
                 reply->add_output_tokens(prediction);
 
             }
