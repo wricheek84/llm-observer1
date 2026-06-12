@@ -2,14 +2,18 @@ import psycopg2
 from datetime import datetime
 
 
-DB_CONFIG = {
-    "dbname": "postgres",
-    "user": "postgres",
-    "password": "wricheek",
-    "host": "localhost",
-    "port": "5432"
-}
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
+
+DB_CONFIG = {
+    "dbname": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "host": os.getenv("DB_HOST"),
+    "port": os.getenv("DB_PORT")
+}
 def create_db():
     """Initializes the PostgreSQL history table if it doesn't exist."""
     conn = psycopg2.connect(**DB_CONFIG)
