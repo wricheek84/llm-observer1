@@ -1,4 +1,5 @@
 import time
+import sqlite3
 from gateway import LLMWatchdogGateway
 
 def generate_150_test_suite():

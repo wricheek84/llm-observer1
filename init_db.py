@@ -24,15 +24,24 @@ def initialize_vector_database():
    
     print("[DB_INIT] Loading BAAI/bge-small-en-v1.5 onto CPU memory...")
     encoder = SentenceTransformer('BAAI/bge-small-en-v1.5')
+    knowledge_dir="knowledge_source"
+    sample_corpus = []
+    print(f"Scanning '{knowledge_dir}' for documentation files...")
+    for file_name in os.listdir(knowledge_dir):
+        if file_name.endswith(".txt") or file_name.endswith(".md"):
+            file_path = os.path.join(knowledge_dir, file_name)
+            
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+                
+                paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+                sample_corpus.extend(paragraphs)
+                
+    print(f"[DB_INIT] Total chunks processed and gathered into memory: {len(sample_corpus)}")
 
     
-    sample_corpus = [
-        "QuantumCorp was officially founded on August 4, 2002, specializing in enterprise machine learning infrastructure.",
-        "The security protocol code-named Watchdog was deployed in 2026 to monitor systemic token performance and data leaks.",
-        "SRE-Pilot is a distributed event-driven system built using Go and C++20 utilizing Redpanda and Qdrant backend stores.",
-        "The maximum throughput of the proprietary C++ inference server reached a optimized metric baseline of 2240 tokens per second.",
-        "For corporate compliance standards, any employee document containing credit card data or explicit SSNs must trigger an immediate block."
-    ]
+   
 
    
     print(f"[DB_INIT] Translating and uploading {len(sample_corpus)} text chunks...")

@@ -12,7 +12,7 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 import inference_pb2
 import inference_pb2_grpc
-
+import yaml
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -44,15 +44,54 @@ cpp_stub = inference_pb2_grpc.InferenceEngineStub(grpc_channel)
 
 FAITHFULNESS_THRESHOLD = 0.60
 
-def check_regex_pii(text):
+def enforce_policy(text):
+    # Safely locate policy.yaml one directory up from inference-server-cpp
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    policy_path = os.path.join(current_dir, "..", "policy.yaml")
+    
+    try:
+        with open(policy_path, 'r') as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[CRITICAL] Could not read policy.yaml from parent directory: {e}")
+        return False, None
+
+    pii_cfg = config.get('pii_settings', {})
+    injection_cfg = config.get('prompt_injection', {})
+
+    # 1. Check Prompt Injection (Keywords & Regex)
+    if injection_cfg.get('enabled', True):
+        # Check Keywords
+        for kw in injection_cfg.get('keywords', []):
+            if kw.lower() in text.lower():
+                if injection_cfg.get('action') == "block":
+                    return True, f"Prompt Injection Keyword: '{kw}'"
+        # Check Regex
+        for pat in injection_cfg.get('regex_patterns', []):
+            if re.search(pat, text, re.IGNORECASE):
+                if injection_cfg.get('action') == "block":
+                    return True, f"Prompt Injection Pattern Triggered"
+
+    # 2. Check PII (Respecting Block vs. Log actions)
     pii_patterns = {
-        "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-        "PHONE": r"\+?\d{1,4}?[-.\s]?\(?\d{1,3}?\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}",
-        "CREDIT_CARD": r"\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}"
+        "email": r"[\w\.-]+@[\w\.-]+\.\w+",
+        "phone": r"\b\+?\d{1,3}[-.\s]?\(?\d{1,4}?\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b",
+        "credit_card": r"\b(?:\d[ -]*?){13,16}\b",
+        "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+        "ip_address": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+        "bank_account": r"\b\d{9,18}\b"
     }
+
     for pii_type, pattern in pii_patterns.items():
-        if re.search(pattern, text):
-            return True, pii_type
+        cfg = pii_cfg.get(pii_type, {})
+        if cfg.get('enabled', True):
+            if re.search(pattern, text, re.IGNORECASE):
+                if cfg.get('action', 'log') == "block":
+                    return True, f"Blocked PII: {pii_type.upper()}"
+                else:
+                    # Soft logging, no blocking
+                    print(f"\n[AUDIT ALERT] Policy violation logged but allowed: {pii_type.upper()}")
+
     return False, None
 
 def dummy_tokenize(text):
@@ -120,7 +159,7 @@ def log_transaction(user_input, regex_status, inference_result, inference_time, 
 
 def run_chat_sandbox():
     
-    print(" SRE-PILOT WATCHDOG: LIVE INTERACTIVE SECURITY PROXY CHAT")
+    print(" LLM-OBSERVER : LIVE INTERACTIVE SECURITY PROXY CHAT")
     print("Type your technical queries below. Type 'exit' or 'quit' to stop.\n")
     
     while True:
@@ -134,11 +173,11 @@ def run_chat_sandbox():
                 
             start_time = time.time()
             
-            has_pii, pii_type = check_regex_pii(user_prompt)
-            if has_pii:
-                print(f"\n[WATCHDOG SECURITY BLOCK] Local Regex flagged sensitive information path ({pii_type}).")
+            is_blocked, block_reason = enforce_policy(user_prompt)
+            if is_blocked:
+                print(f"\n[WATCHDOG SECURITY BLOCK] {block_reason}")
                 print("Bot  >>> Security policy violation. Request dropped locally.\n")
-                log_transaction(user_prompt, "FAILED", 0, 0.0, None, None, "SECURITY_BLOCK", "[WITHHELD_PII]")
+                log_transaction(user_prompt, f"BLOCKED: {block_reason}", 0, 0.0, None, None, "SECURITY_BLOCK", "[WITHHELD_POLICY_VIOLATION]")
                 continue
 
             token_array = dummy_tokenize(user_prompt)
