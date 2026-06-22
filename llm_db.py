@@ -53,10 +53,38 @@ def insert_request(user_input, regex_status, inference_result, inference_time, l
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     ''', (timestamp, user_input, regex_status, inference_result, 
           inference_time, llm_response, critic_score, verdict, final_output))
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS eval_runs (
+            id SERIAL PRIMARY KEY,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            success_count INTEGER NOT NULL,
+            healed_count INTEGER NOT NULL,
+            blocked_count INTEGER NOT NULL,
+            failures INTEGER NOT NULL,
+            avg_latency REAL NOT NULL,
+            total_runtime REAL NOT NULL
+        )
+    ''')
+
     
     conn.commit()
     c.close()
     conn.close()
+def insert_eval_run(success_count, healed_count, blocked_count, failures, avg_latency, total_runtime):
+    """Logs the final scorecard summary of an automated test run into PostgreSQL."""
+    conn = psycopg2.connect(**DB_CONFIG)
+    c = conn.cursor()
+    
+    c.execute('''
+        INSERT INTO eval_runs (
+            success_count, healed_count, blocked_count, failures, avg_latency, total_runtime
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+    ''', (success_count, healed_count, blocked_count, failures, avg_latency, total_runtime))
+    
+    conn.commit()
+    c.close()
+    conn.close()
+    print("[DATABASE] Evaluation scorecard successfully saved to PostgreSQL.")
 
 if __name__ == "__main__":
     create_db()

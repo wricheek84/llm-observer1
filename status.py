@@ -34,7 +34,7 @@ def check_database_salvage():
             for verdict, count in records:
                 print(f" Ledger Status: {verdict:<16} | Logs Committed: {count}")
                 total_saved += count
-            print("------------------------------------------------------------")
+           
             print(f" Total safe rows captured: {total_saved} / 150")
        
         

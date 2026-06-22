@@ -17,9 +17,11 @@ import inference_pb2_grpc
 from llm_db import insert_request
 from prometheus_client import start_http_server, Counter, Histogram
 
-# Initialize Prometheus metrics
+
 request_count = Counter('llm_requests_total', 'Total number of LLM requests', labelnames=['status'])
 request_duration = Histogram('llm_request_duration_seconds', 'Duration of LLM requests', buckets=[0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.0])
+engine_latency_metric = Histogram('llm_engine_latency_seconds', 'Duration of C++ operations', buckets=[0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.0,2.5,5,10])
+cloud_latency_metric = Histogram('llm_cloud_latency_seconds', 'Duration of OpenRouter API', buckets=[0.1, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0])
 faithfulness_metric = Histogram('llm_faithfulness_score', 'Semantic faithfulness similarity score', buckets=[0.1, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
 class LLMWatchdogGateway:
@@ -93,14 +95,18 @@ class LLMWatchdogGateway:
             "model": self.llm_model,
             "messages": [{"role": "user", "content": prompt_text}]
         }
+        start_time =time()
         try:
             response = requests.post(self.openrouter_url, headers=headers, json=payload)
+            cloud_latency_metric.observe(time() - start_time)
             if response.status_code == 200:
-                # Slicing through the OpenRouter JSON layout to grab only the text content
+                
                 return response.json()["choices"][0]["message"]["content"]
             else:
+                
                 raise Exception(f"OpenRouter API error {response.status_code}: {response.text}")
         except Exception as e:
+            cloud_latency_metric.observe(time() - start_time)
             raise Exception(f"Network transport failure when contacting OpenRouter: {e}")
 
     def scan_input(self, text):
@@ -178,15 +184,15 @@ class LLMWatchdogGateway:
         security_verdict = self.scan_input(user_query)
         if security_verdict and security_verdict.get('status') == 'block':
             reason = security_verdict.get('reason', 'Regex block')
-            request_count.labels(status='block').inc()
+            request_count.labels(status='BLOCKED').inc()
             insert_request(
                 user_input=user_query,
                 regex_status=f"BLOCKED: {reason}",
-                inference_result=-1, # Bypassed C++ engine
+                inference_result=-1, 
                 inference_time=0.0,
                 llm_response=None,
                 critic_score=None,
-                verdict="SECURITY_BLOCK",
+                verdict="BLOCKED",
                 final_output=reason
             )
             return security_verdict
@@ -210,6 +216,7 @@ class LLMWatchdogGateway:
            
             if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 1:
                reason = "C++ Inference Engine flagged hostile/malicious semantic intent."
+               request_count.labels(status='BLOCKED').inc()
                insert_request(
                     user_input=user_query,
                     regex_status="PASSED",
@@ -217,7 +224,7 @@ class LLMWatchdogGateway:
                     inference_time=engine_latency,
                     llm_response=None,
                     critic_score=None,
-                    verdict="SECURITY_BLOCK",
+                    verdict="BLOCKED",
                     final_output=reason
                 )
                return {"status": "block", "reason": reason}
@@ -236,7 +243,7 @@ class LLMWatchdogGateway:
         if faithfulness_score >= 0.60:
             print("[GATEWAY] Response verified as factual. Passing to user.")
             request_count.labels(status="SUCCESS").inc()
-            request_duration.observe(engine_latency/1000)
+            engine_latency_metric.observe(engine_latency)
             faithfulness_metric.observe(float(faithfulness_score))
             insert_request(
                 user_input=user_query,
@@ -256,7 +263,7 @@ class LLMWatchdogGateway:
                 "retries_attempted": 0
             }
         print(f"[WATCHDOG ALERT] Hallucination detected (Score: {faithfulness_score:.4f} < 0.60)! Intercepting response.")
-        print("[GATEWAY] Reformulating query with ground-truth context injection...")
+        print("[GATEWAY] Reformulating query with ground-truth context injection")
         healed_query = f"{user_query} (System Hint: Stick strictly to this data: {ground_truth})"
         print("[GATEWAY] Forwarding healed query for C++ validation and Cloud Recovery")
         try:
@@ -275,7 +282,7 @@ class LLMWatchdogGateway:
                     print(f"[TELEMETRY] Cumulative C++ pipeline latency: {engine_latency:.4f}ms")
             if len(grpc_response.output_tokens) > 0 and grpc_response.output_tokens[0] == 1:
                 reason = "C++ Engine blocked self-healed prompt variant due to semantic payload risk."
-                request_count.labels(status="SECURITY_BLOCK").inc()
+                request_count.labels(status="BLOCKED").inc()
                 insert_request(
                     user_input=user_query,
                     regex_status="PASSED",
@@ -296,7 +303,7 @@ class LLMWatchdogGateway:
         new_score, _ = self.calculate_faithfulness(healed_query, healed_text_response)
         if new_score >= 0.60:
             request_count.labels(status="HEALED").inc()
-            request_duration.observe(engine_latency/1000)
+            engine_latency_metric.observe(engine_latency)
             faithfulness_metric.observe(float(new_score))
             insert_request(
                 user_input=user_query,
@@ -313,19 +320,19 @@ class LLMWatchdogGateway:
                 "status": "HEALED",
                 "response": healed_text_response,
                 "faithfulness_score": f"{new_score:.4f}",
-                "engine_latency_ms": "0.0",
+                "engine_latency_ms": f"{engine_latency * 1000:.2f}",
                 "retries_attempted": 1
             }
         print("[WATCHDOG CRITICAL] Recovery attempt failed to clear threshold. Shutting down exploit risk.")
         fallback_msg = "I don't have enough information to answer that question accurately."
         request_count.labels(status="BLOCKED").inc()
-        request_duration.observe(engine_latency/1000)
+        engine_latency_metric.observe(engine_latency)
         faithfulness_metric.observe(float(new_score))
         insert_request(
             user_input=user_query,
             regex_status="PASSED",
             inference_result=0,
-            inference_time=engine_latency/1000,
+            inference_time=engine_latency,
             llm_response=model_text_response,
             critic_score=float(new_score),
             verdict="BLOCKED",
@@ -347,7 +354,7 @@ if __name__ == "__main__":
     
     gateway = LLMWatchdogGateway()
     print("[SERVER] Watchdog Gateway initialized. Awaiting requests (Press Ctrl+C to exit)")
-    print("[TEST] Injecting a mock success request...")
+    print("[TEST] Injecting a mock success request")
     gateway.process_request("Can you give me the architectural breakdown of the SRE-Pilot system?")
     try:
         while True:

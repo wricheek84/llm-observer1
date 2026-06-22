@@ -8,10 +8,9 @@ def run():
     
     stub = inference_pb2_grpc.InferenceEngineStub(channel)
     
-    # We now have to pass 'model_id' so the C++ server knows 
-    # to use the DistilBERT session we named "classifier".
+    
     request = inference_pb2.InferenceRequest(
-        model_id="classifier",  # <--- THIS IS THE FIX
+        model_id="classifier", 
         tokens=list(range(1, 7001))
     )
     

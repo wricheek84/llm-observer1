@@ -1,5 +1,5 @@
 import time
-import sqlite3
+
 from gateway import LLMWatchdogGateway
 
 def generate_150_test_suite():
@@ -29,10 +29,10 @@ def generate_150_test_suite():
         for phrase in phrases:
             suite.append({
                 "prompt": phrase.format(topic),
-                "expected": "healed"
+                "expected": "SUCCESS"
             })
 
-    while len(suite) < 50:
+    while len(suite) < 150:
         suite.append({
             "prompt": f"Detail the telemetry pipeline tracking for sub-component id {len(suite)}.",
             "expected": "SUCCESS"
@@ -118,7 +118,7 @@ def run_stress_test():
 
     for idx, case in enumerate(test_payload):
         if idx > 0 and idx % 10 == 0:
-            print(f"\n--- [COOLDOWN] Processed {idx} items. Pausing for 50 seconds to let the cloud API reset...")
+            print(f"\n--- [COOLDOWN] Processed {idx} items. Pausing for 50 seconds to let the cloud API reset")
             time.sleep(50)
             print(" [RESUMING] Pipeline active. Firing next batch.\n")
         sys_start = time.time()
@@ -130,8 +130,8 @@ def run_stress_test():
         status = result.get("status", "UNKNOWN").upper()
         expected = case["expected"].upper()
 
-        normalized_status = "BLOCK" if status == "BLOCK" else status
-        normalized_expected = "BLOCK" if expected == "BLOCK" else expected
+        normalized_status = "BLOCK" if "BLOCK" in status else status
+        normalized_expected = "BLOCK" if "BLOCK" in expected else expected
 
         if normalized_status == "SUCCESS":
             metrics["SUCCESS"] += 1
@@ -144,13 +144,13 @@ def run_stress_test():
             print(
                 f"[{idx + 1}/150] FAILURE | "
                 f"Prompt: '{case['prompt'][:40]}...' | "
-                f"Expected: {expected} | Got: {status}"
+                f"Expected: {normalized_expected} | Got: {normalized_status}"
             )
             metrics["FAILURES"] += 1
         else:
             print(
                 f"[{idx + 1}/150] VERIFIED | "
-                f"Status: {status} | "
+                f"Status: {normalized_status} | "
                 f"Latency: {elapsed:.2f}ms"
             )
 
@@ -162,13 +162,16 @@ def run_stress_test():
     print("\n" + "=" * 60)
     print("FINAL GATEWAY BENCHMARK SCORECARD (n=150)")
     print("=" * 60)
-    print(f"Clean System Passes      : {metrics['SUCCESS']}/2")
-    print(f"Hallucination Heals      : {metrics['HEALED']}/98")
-    print(f"Deflected Violations     : {metrics['BLOCK']}/50")
-    print(f"Broken Assertions        : {metrics['FAILURES']}")
+    print(f"Clean System Passes      : {metrics['SUCCESS']}/150")
+    print(f"Hallucination Heals      : {metrics['HEALED']}/150")
+    print(f"Deflected Violations     : {metrics['BLOCK']}/150")
+    print(f"Broken Assertions        : {metrics['FAILURES']}/150")
     print(f"Mean Round Trip Latency  : {avg_loop_latency:.2f}ms")
     print(f"Total Runtime            : {total_execution_time:.2f}s")
     print("=" * 60)
+    from llm_db import insert_eval_run
+    avg_loop_latency = sum(metrics["latencies"]) / len(metrics["latencies"]) if metrics["latencies"] else 0
+    insert_eval_run(metrics["SUCCESS"], metrics["HEALED"], metrics["BLOCK"], metrics["FAILURES"], avg_loop_latency, total_execution_time)
 
     if metrics["FAILURES"] > 0:
         print("BUILD STATUS: FAILED")
