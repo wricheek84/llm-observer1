@@ -23,5 +23,5 @@ jobs:
           pip install fastapi uvicorn pytest requests pyyaml grpcio numpy psycopg2-binary qdrant-client sentence-transformers transformers
 
       - name: Run security policy regression tests
-        run: pytest
+        run: python -m pytest
     
