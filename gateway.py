@@ -16,6 +16,12 @@ import inference_pb2
 import inference_pb2_grpc
 from llm_db import insert_request
 from prometheus_client import start_http_server, Counter, Histogram
+from fastapi import FastAPI
+from pydantic import BaseModel
+app = FastAPI()
+
+class QueryRequest(BaseModel):
+    user_query: str
 
 
 request_count = Counter('llm_requests_total', 'Total number of LLM requests', labelnames=['status'])
@@ -345,21 +351,19 @@ class LLMWatchdogGateway:
             "faithfulness_score": f"{new_score:.4f}",
             "retries_attempted": 1
         }
+gateway = LLMWatchdogGateway()
+
+@app.post("/chat")
+def chat_endpoint(request: QueryRequest):
+    return gateway.process_request(request.user_query)
 
     
 if __name__ == "__main__":
-    from time import sleep
+    import uvicorn
     print("[TELEMETRY] Starting Prometheus metrics server on port 8000")
     start_http_server(8000)
     
-    gateway = LLMWatchdogGateway()
-    print("[SERVER] Watchdog Gateway initialized. Awaiting requests (Press Ctrl+C to exit)")
-    print("[TEST] Injecting a mock success request")
-    gateway.process_request("Can you give me the architectural breakdown of the SRE-Pilot system?")
-    try:
-        while True:
-            sleep(1)
-    except KeyboardInterrupt:
-        print("\n[SHUTDOWN] Stopping gateway cleanly.")
+    print("[SERVER] Watchdog Gateway web server booting on port 8001...")
+    uvicorn.run(app, host="127.0.0.1", port=8001)
     
     
